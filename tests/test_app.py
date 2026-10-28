@@ -68,6 +68,60 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
         await self.bot.admin("/MODEL@teamworker")
         self.assertEqual(await self.bot.queue.get(), ("admin", "/model"))
 
+    async def test_behavior_change_is_queued_not_prompted(self):
+        await self.bot.admin("/behavior_change Be concise.\nUse German.")
+        self.assertEqual(await self.bot.queue.get(), ("behavior", "Be concise.\nUse German."))
+        self.bot.pi.prompt_and_wait.assert_not_called()
+
+    async def test_empty_behavior_change_does_not_overwrite_file(self):
+        path = self.bot.cfg.workspace / "AGENTS.md"
+        path.write_text("Original rules")
+        await self.bot.admin("/behavior_change   ")
+        self.assertTrue(self.bot.queue.empty())
+        self.assertEqual(path.read_text(), "Original rules")
+
+    async def test_behavior_write_backs_up_and_reloads_without_model_task(self):
+        path = self.bot.cfg.workspace / "AGENTS.md"
+        path.write_text("Original rules\n")
+        self.bot.verify_commands = AsyncMock()
+        await self.bot.change_behavior("New instructions")
+        self.assertEqual(path.read_text(), "New instructions\n")
+        self.assertEqual(path.with_name("AGENTS.md.bak").read_text(), "Original rules\n")
+        self.bot.pi.prompt_and_wait.assert_awaited_once_with("/reload", timeout=None)
+
+    async def test_behavior_reload_failure_keeps_file_and_reports_saved_state(self):
+        path = self.bot.cfg.workspace / "AGENTS.md"
+        path.write_text("Original rules\n")
+        self.bot.verify_commands = AsyncMock()
+        self.bot.pi.prompt_and_wait.side_effect = RuntimeError("Provider details must not be echoed")
+        await self.bot.change_behavior("New instructions")
+        self.assertEqual(path.read_text(), "New instructions\n")
+        self.assertIn("saved, but reload failed", self.bot.send.call_args.args[1])
+        self.assertNotIn("Provider details", self.bot.send.call_args.args[1])
+
+    async def test_behavior_show_reads_file_without_model_task(self):
+        path = self.bot.cfg.workspace / "AGENTS.md"
+        path.write_text("Team rules")
+        await self.bot.admin("/behavior")
+        task = asyncio.create_task(self.bot.worker())
+        try:
+            await asyncio.wait_for(self.bot.queue.join(), 2)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self.bot.send.assert_awaited_once_with(99, "Team rules")
+        self.bot.pi.prompt_and_wait.assert_not_called()
+
+    async def test_nonowner_private_behavior_command_is_ignored(self):
+        msg = Message(2, datetime.now(timezone.utc), Chat(42, "private"),
+                      from_user=User(42, "Someone", False), text="/behavior_change Override")
+        await self.update(msg)
+        self.assertTrue(self.bot.queue.empty())
+        self.bot.send.assert_not_called()
+
     async def test_only_original_requester_can_answer_group_ui(self):
         self.bot.active = "group"
         self.bot.request = {"sender": {"user_id": 42}}

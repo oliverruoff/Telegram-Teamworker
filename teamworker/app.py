@@ -19,7 +19,7 @@ from .telegram_format import format_for_telegram
 log = logging.getLogger(__name__)
 ADMIN_COMMANDS = {"/connect", "/model", "/thinking", "/reload"}
 HELP = ("Administration: /connect [openrouter|openai-codex], /model, /thinking, "
-        "/reload, /status, /new, /stop, /cancel.\n"
+        "/behavior, /behavior_change <text>, /reload, /status, /new, /stop, /cancel.\n"
         "Normal tasks belong in the configured group and require @mention. "
         "Install skills in /workspace/skills; then /reload.")
 
@@ -157,6 +157,17 @@ class Teamworker:
         elif command == "/new":
             self.queue.put_nowait(("reset", self.store.latest()))
             await self.send(self.cfg.owner_id, "Session reset queued.")
+        elif command == "/behavior":
+            self.queue.put_nowait(("behavior", None))
+        elif command == "/behavior_change":
+            parts = text.split(maxsplit=1)
+            if len(parts) < 2 or not parts[1].strip():
+                await self.send(self.cfg.owner_id,
+                                "Usage: /behavior_change <complete instructions>\n"
+                                "Replaces the entire workspace AGENTS.md, not just one rule. "
+                                "Previous version is saved as AGENTS.md.bak. Use /behavior first.")
+                return
+            self.queue.put_nowait(("behavior", parts[1].strip()))
         elif command in ADMIN_COMMANDS:
             # Normalize command suffix/case so it always resolves to a registered
             # command, never accidentally falls through to a model prompt.
@@ -171,11 +182,17 @@ class Teamworker:
             self.active = kind
             self.stopped = False
             try:
+                if kind == "behavior" and value is None:
+                    await self.send(self.cfg.owner_id,
+                                    (self.cfg.workspace / "AGENTS.md").read_text(encoding="utf-8"))
+                    continue
                 if not self.pi.running:
                     await self.pi.restart()
                     await self.verify_commands()
                     await self.restore_session()
-                if kind == "reset":
+                if kind == "behavior":
+                    await self.change_behavior(str(value))
+                elif kind == "reset":
                     await self.pi.new_session()
                     # A new pi session is lazy and may not have a file yet.
                     # Clear the old checkpoint so a restart cannot resurrect it.
@@ -209,6 +226,33 @@ class Teamworker:
                 self.active = ""
                 self.request = None
                 self.queue.task_done()
+
+    async def change_behavior(self, text: str) -> None:
+        await self.verify_commands()
+        path = self.cfg.workspace / "AGENTS.md"
+        if path.exists():
+            backup = path.with_name("AGENTS.md.bak")
+            backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            backup.chmod(0o600)
+        temporary = path.with_name("AGENTS.md.tmp")
+        temporary.write_text(text.rstrip() + "\n", encoding="utf-8")
+        temporary.chmod(0o600)
+        temporary.replace(path)
+        # Native reload applies instructions to the existing session; no reset
+        # and no model request. A failed reload leaves the saved file and backup.
+        self.context_failed = False
+        try:
+            await self.pi.prompt_and_wait("/reload", timeout=None)
+            if self.context_failed:
+                raise RuntimeError("Reload failed")
+        except Exception:
+            await self.send(self.cfg.owner_id,
+                            "Behavior saved, but reload failed. Fix setup and run /reload. "
+                            "Previous version: AGENTS.md.bak.")
+            return
+        await self.send(self.cfg.owner_id,
+                        "Behavior saved and reloaded. Previous version: AGENTS.md.bak. "
+                        "Existing session history is retained.")
 
     async def context_usage(self) -> None:
         self.usage = {}

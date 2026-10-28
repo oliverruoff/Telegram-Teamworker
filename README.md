@@ -83,6 +83,8 @@ ein schon volles Kontextfenster geladen.
 | `/connect [openrouter\|openai-codex]` | Provider verbinden, Modell und Thinking auswählen |
 | `/model [provider/model]` | Modell auswählen |
 | `/thinking [level]` | Thinking-Stufe auswählen |
+| `/behavior` | Aktuelle Anweisungen aus `workspace/AGENTS.md` anzeigen |
+| `/behavior_change <Text>` | Vollständige Anweisungen ersetzen, alte Fassung als `AGENTS.md.bak` sichern und automatisch neu laden |
 | `/reload` | Skills, MCP-Konfiguration und Anweisungen neu laden |
 | `/status` | Aktivität und Queue anzeigen |
 | `/new` | Neue gemeinsame Gruppensession, geordnet hinter bisherigen Aufgaben |
@@ -91,6 +93,11 @@ ein schon volles Kontextfenster geladen.
 | `/help` | Hilfe |
 
 Normale Aufgaben im privaten Chat werden nicht an den Agenten weitergereicht.
+`/behavior_change` ersetzt die **gesamte** Datei einschließlich bisheriger Regeln;
+vorher `/behavior` ansehen. Es ist keine Ergänzungs- oder KI-Umschreibefunktion.
+Die Änderung wird hinter laufenden Aufgaben ausgeführt. Die Session bleibt erhalten,
+und die neue Datei übersteht Neustarts und Deployments. Bei einem Reload-Fehler
+bleibt die Datei gespeichert; nach Beheben des Fehlers `/reload` erneut ausführen.
 API-Keys, die du für `/connect` eingibst, gehen durch den Telegram-Chatverlauf;
 alternativ Umgebungsvariablen verwenden. OAuth erfordert kein Passwort im Bot-Chat.
 
